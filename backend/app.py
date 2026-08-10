@@ -1,168 +1,150 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional
+import http.server
+import socketserver
+import json
 import os
+import urllib.parse
+from typing import Dict, Any
 
 from rl_core.environment import MazeEnv
 from rl_core.agents import QLearningAgent, SARSAAgent
 from rl_core.trainer import Trainer
 
-app = FastAPI(
-    title="Intelligent Maze Solver API",
-    description="Reinforcement Learning API for Q-Learning and SARSA GridWorld Maze Solver",
-    version="1.0.0"
-)
+PORT = 8000
+FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
 
-# CORS middleware for development flexibility
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+class RLStudioHandler(http.server.SimpleHTTPRequestHandler):
+    """
+    Standard library HTTP request handler serving REST API endpoints and frontend static files.
+    """
 
-# --- Pydantic Schemas ---
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=FRONTEND_DIR, **kwargs)
 
-class MazeConfigSchema(BaseModel):
-    grid: Optional[List[List[int]]] = None
-    rows: int = 8
-    cols: int = 8
-    start_pos: Optional[List[int]] = None
-    goal_pos: Optional[List[int]] = None
-    step_reward: float = -1.0
-    wall_penalty: float = -5.0
-    goal_reward: float = 100.0
-    trap_penalty: float = -20.0
+    def _send_json_response(self, data: Any, status_code: int = 200):
+        body = json.dumps(data).encode('utf-8')
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+        self.wfile.write(body)
 
-class TrainRequestSchema(BaseModel):
-    algorithm: str = Field("q_learning", description="q_learning or sarsa")
-    maze: MazeConfigSchema
-    episodes: int = 400
-    alpha: float = 0.1
-    gamma: float = 0.99
-    epsilon: float = 1.0
-    epsilon_min: float = 0.01
-    epsilon_decay: float = 0.995
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
 
-class CompareRequestSchema(BaseModel):
-    maze: MazeConfigSchema
-    episodes: int = 400
-    alpha: float = 0.1
-    gamma: float = 0.99
-    epsilon_decay: float = 0.995
+    def do_GET(self):
+        parsed_path = urllib.parse.urlparse(self.path).path
 
-class GenerateMazeRequestSchema(BaseModel):
-    rows: int = 8
-    cols: int = 8
-    wall_density: float = 0.25
-    trap_density: float = 0.05
+        if parsed_path == "/api/presets":
+            res = {
+                "presets": ["easy", "medium", "hard", "cliff_walker"],
+                "easy": MazeEnv.get_preset_maze("easy").get_grid_state(),
+                "medium": MazeEnv.get_preset_maze("medium").get_grid_state(),
+                "hard": MazeEnv.get_preset_maze("hard").get_grid_state(),
+                "cliff_walker": MazeEnv.get_preset_maze("cliff_walker").get_grid_state()
+            }
+            return self._send_json_response(res)
 
-# --- Endpoints ---
+        # Fallback to serving static files from FRONTEND_DIR
+        return super().do_GET()
 
-@app.get("/api/presets")
-def get_presets():
-    """Returns available preset maze names and structures."""
-    return {
-        "presets": ["easy", "medium", "hard", "cliff_walker"],
-        "easy": MazeEnv.get_preset_maze("easy").get_grid_state(),
-        "medium": MazeEnv.get_preset_maze("medium").get_grid_state(),
-        "hard": MazeEnv.get_preset_maze("hard").get_grid_state(),
-        "cliff_walker": MazeEnv.get_preset_maze("cliff_walker").get_grid_state()
-    }
+    def do_POST(self):
+        parsed_path = urllib.parse.urlparse(self.path).path
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length)
 
-@app.post("/api/maze/generate")
-def generate_maze(req: GenerateMazeRequestSchema):
-    """Generates a random solvable maze with path guarantee."""
-    try:
-        env = MazeEnv.generate_random_solvable_maze(
-            rows=req.rows,
-            cols=req.cols,
-            wall_density=req.wall_density,
-            trap_density=req.trap_density
-        )
-        return env.get_grid_state()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        try:
+            req = json.loads(post_data.decode('utf-8')) if post_data else {}
+        except Exception:
+            return self._send_json_response({"error": "Invalid JSON body"}, 400)
 
-@app.post("/api/train")
-def train_agent_endpoint(req: TrainRequestSchema):
-    """Trains a single Q-Learning or SARSA agent and returns metrics, policy, and Q-table."""
-    start_tuple = tuple(req.maze.start_pos) if req.maze.start_pos else None
-    goal_tuple = tuple(req.maze.goal_pos) if req.maze.goal_pos else None
+        if parsed_path == "/api/maze/generate":
+            rows = req.get("rows", 8)
+            cols = req.get("cols", 8)
+            wall_density = req.get("wall_density", 0.25)
+            trap_density = req.get("trap_density", 0.05)
 
-    env = MazeEnv(
-        grid=req.maze.grid,
-        rows=req.maze.rows,
-        cols=req.maze.cols,
-        start_pos=start_tuple,
-        goal_pos=goal_tuple,
-        step_reward=req.maze.step_reward,
-        wall_penalty=req.maze.wall_penalty,
-        goal_reward=req.maze.goal_reward,
-        trap_penalty=req.maze.trap_penalty
-    )
+            env = MazeEnv.generate_random_solvable_maze(rows, cols, wall_density, trap_density)
+            return self._send_json_response(env.get_grid_state())
 
-    algo = req.algorithm.lower()
-    if algo == "q_learning":
-        agent = QLearningAgent(
-            rows=env.rows,
-            cols=env.cols,
-            alpha=req.alpha,
-            gamma=req.gamma,
-            epsilon=req.epsilon,
-            epsilon_min=req.epsilon_min,
-            epsilon_decay=req.epsilon_decay
-        )
-    elif algo == "sarsa":
-        agent = SARSAAgent(
-            rows=env.rows,
-            cols=env.cols,
-            alpha=req.alpha,
-            gamma=req.gamma,
-            epsilon=req.epsilon,
-            epsilon_min=req.epsilon_min,
-            epsilon_decay=req.epsilon_decay
-        )
-    else:
-        raise HTTPException(status_code=400, detail=f"Unsupported algorithm '{req.algorithm}'. Must be 'q_learning' or 'sarsa'.")
+        elif parsed_path == "/api/train":
+            algo = req.get("algorithm", "q_learning").lower()
+            maze_cfg = req.get("maze", {})
+            episodes = req.get("episodes", 400)
+            alpha = req.get("alpha", 0.1)
+            gamma = req.get("gamma", 0.99)
+            epsilon = req.get("epsilon", 1.0)
+            epsilon_min = req.get("epsilon_min", 0.01)
+            epsilon_decay = req.get("epsilon_decay", 0.995)
 
-    results = Trainer.train_agent(env, agent, episodes=req.episodes)
-    results["policy"] = {f"{r},{c}": action for (r, c), action in agent.get_policy().items()}
-    results["maze"] = env.get_grid_state()
-    return results
+            start = tuple(maze_cfg["start_pos"]) if "start_pos" in maze_cfg and maze_cfg["start_pos"] else None
+            goal = tuple(maze_cfg["goal_pos"]) if "goal_pos" in maze_cfg and maze_cfg["goal_pos"] else None
 
-@app.post("/api/compare")
-def compare_endpoint(req: CompareRequestSchema):
-    """Runs head-to-head benchmarking for Q-Learning vs SARSA on the given maze."""
-    start_tuple = tuple(req.maze.start_pos) if req.maze.start_pos else None
-    goal_tuple = tuple(req.maze.goal_pos) if req.maze.goal_pos else None
+            env = MazeEnv(
+                grid=maze_cfg.get("grid"),
+                rows=maze_cfg.get("rows", 8),
+                cols=maze_cfg.get("cols", 8),
+                start_pos=start,
+                goal_pos=goal,
+                step_reward=maze_cfg.get("step_reward", -1.0),
+                wall_penalty=maze_cfg.get("wall_penalty", -5.0),
+                goal_reward=maze_cfg.get("goal_reward", 100.0),
+                trap_penalty=maze_cfg.get("trap_penalty", -20.0)
+            )
 
-    env = MazeEnv(
-        grid=req.maze.grid,
-        rows=req.maze.rows,
-        cols=req.maze.cols,
-        start_pos=start_tuple,
-        goal_pos=goal_tuple,
-        step_reward=req.maze.step_reward,
-        wall_penalty=req.maze.wall_penalty,
-        goal_reward=req.maze.goal_reward,
-        trap_penalty=req.maze.trap_penalty
-    )
+            if algo == "q_learning":
+                agent = QLearningAgent(env.rows, env.cols, alpha=alpha, gamma=gamma, epsilon=epsilon, epsilon_min=epsilon_min, epsilon_decay=epsilon_decay)
+            elif algo == "sarsa":
+                agent = SARSAAgent(env.rows, env.cols, alpha=alpha, gamma=gamma, epsilon=epsilon, epsilon_min=epsilon_min, epsilon_decay=epsilon_decay)
+            else:
+                return self._send_json_response({"error": f"Unsupported algorithm '{algo}'"}, 400)
 
-    comparison = Trainer.compare(
-        env,
-        episodes=req.episodes,
-        alpha=req.alpha,
-        gamma=req.gamma,
-        epsilon_decay=req.epsilon_decay
-    )
-    comparison["maze"] = env.get_grid_state()
-    return comparison
+            results = Trainer.train_agent(env, agent, episodes=episodes)
+            results["policy"] = {f"{r},{c}": action for (r, c), action in agent.get_policy().items()}
+            results["maze"] = env.get_grid_state()
+            return self._send_json_response(results)
 
-# Mount Static Frontend
-frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
-if os.path.exists(frontend_dir):
-    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="static")
+        elif parsed_path == "/api/compare":
+            maze_cfg = req.get("maze", {})
+            episodes = req.get("episodes", 400)
+            alpha = req.get("alpha", 0.1)
+            gamma = req.get("gamma", 0.99)
+            epsilon_decay = req.get("epsilon_decay", 0.995)
+
+            start = tuple(maze_cfg["start_pos"]) if "start_pos" in maze_cfg and maze_cfg["start_pos"] else None
+            goal = tuple(maze_cfg["goal_pos"]) if "goal_pos" in maze_cfg and maze_cfg["goal_pos"] else None
+
+            env = MazeEnv(
+                grid=maze_cfg.get("grid"),
+                rows=maze_cfg.get("rows", 8),
+                cols=maze_cfg.get("cols", 8),
+                start_pos=start,
+                goal_pos=goal,
+                step_reward=maze_cfg.get("step_reward", -1.0),
+                wall_penalty=maze_cfg.get("wall_penalty", -5.0),
+                goal_reward=maze_cfg.get("goal_reward", 100.0),
+                trap_penalty=maze_cfg.get("trap_penalty", -20.0)
+            )
+
+            comparison = Trainer.compare(env, episodes=episodes, alpha=alpha, gamma=gamma, epsilon_decay=epsilon_decay)
+            comparison["maze"] = env.get_grid_state()
+            return self._send_json_response(comparison)
+
+        else:
+            return self._send_json_response({"error": "Not Found"}, 404)
+
+def run_server(host: str = "127.0.0.1", port: int = 8000):
+    handler = RLStudioHandler
+    socketserver.TCPServer.allow_reuse_address = True
+    with socketserver.TCPServer((host, port), handler) as httpd:
+        print(f"[*] Intelligent Maze Solver Studio running at http://{host}:{port}")
+        httpd.serve_forever()
+
+if __name__ == "__main__":
+    run_server()
