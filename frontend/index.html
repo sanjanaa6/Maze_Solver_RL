@@ -108,11 +108,19 @@
                     </div>
                     <input type="range" id="param-episodes" min="50" max="2000" step="50" value="500">
                 </div>
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <span>Live Visualization Speed</span>
+                        <span id="val-speed">10 ms</span>
+                    </div>
+                    <input type="range" id="param-speed" min="2" max="100" step="2" value="10">
+                </div>
             </div>
 
             <!-- Action Buttons -->
             <div class="action-buttons">
-                <button id="btn-train" class="btn btn-primary btn-lg"><i class="fa-solid fa-play"></i> Run Training Session</button>
+                <button id="btn-train" class="btn btn-primary btn-lg"><i class="fa-solid fa-play"></i> Fast Backend Train</button>
+                <button id="btn-live-train" class="btn btn-secondary btn-lg"><i class="fa-solid fa-bolt"></i> Live Visual Train</button>
                 <button id="btn-animate" class="btn btn-accent btn-lg" disabled><i class="fa-solid fa-person-running"></i> Animate Path</button>
             </div>
         </aside>

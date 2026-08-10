@@ -13,7 +13,9 @@ const state = {
     evaluatedPath: [],
     trainingResults: null,
     isAnimating: false,
-    animationInterval: null
+    animationInterval: null,
+    isLiveTraining: false,
+    liveTrainTimer: null
 };
 
 // UI Element References
@@ -23,6 +25,7 @@ const presetSelect = document.getElementById('preset-select');
 const btnRandomMaze = document.getElementById('btn-random-maze');
 const btnClearWalls = document.getElementById('btn-clear-walls');
 const btnTrain = document.getElementById('btn-train');
+const btnLiveTrain = document.getElementById('btn-live-train');
 const btnAnimate = document.getElementById('btn-animate');
 const canvasStatus = document.getElementById('canvas-status');
 
@@ -31,11 +34,13 @@ const paramAlpha = document.getElementById('param-alpha');
 const paramGamma = document.getElementById('param-gamma');
 const paramDecay = document.getElementById('param-decay');
 const paramEpisodes = document.getElementById('param-episodes');
+const paramSpeed = document.getElementById('param-speed');
 
 const valAlpha = document.getElementById('val-alpha');
 const valGamma = document.getElementById('val-gamma');
 const valDecay = document.getElementById('val-decay');
 const valEpisodes = document.getElementById('val-episodes');
+const valSpeed = document.getElementById('val-speed');
 
 // Metrics Cards
 const metricSteps = document.getElementById('metric-steps');
@@ -181,13 +186,15 @@ function bindEvents() {
     paramGamma.addEventListener('input', (e) => valGamma.textContent = parseFloat(e.target.value).toFixed(2));
     paramDecay.addEventListener('input', (e) => valDecay.textContent = parseFloat(e.target.value).toFixed(3));
     paramEpisodes.addEventListener('input', (e) => valEpisodes.textContent = e.target.value);
+    paramSpeed.addEventListener('input', (e) => valSpeed.textContent = `${e.target.value} ms`);
 
     // Toggles
     chkPolicy.addEventListener('change', () => drawCanvas());
     chkHeatmap.addEventListener('change', () => drawCanvas());
 
-    // Training Button
+    // Training Buttons
     btnTrain.addEventListener('click', runTrainingSession);
+    btnLiveTrain.addEventListener('click', toggleLiveTrainingSession);
 
     // Animate Button
     btnAnimate.addEventListener('click', animatePathExecution);
@@ -680,4 +687,171 @@ function animatePathExecution() {
 
         stepIdx++;
     }, 200);
+}
+
+// Live Interactive Step-by-Step Training Session
+async function toggleLiveTrainingSession() {
+    if (state.isLiveTraining) {
+        state.isLiveTraining = false;
+        clearTimeout(state.liveTrainTimer);
+        btnLiveTrain.innerHTML = '<i class="fa-solid fa-bolt"></i> Live Visual Train';
+        canvasStatus.textContent = 'Live Training Paused';
+        return;
+    }
+
+    const algo = state.algorithm === 'compare' ? 'q_learning' : state.algorithm;
+    const episodes = parseInt(paramEpisodes.value);
+    const alpha = parseFloat(paramAlpha.value);
+    const gamma = parseFloat(paramGamma.value);
+    let epsilon = 1.0;
+    const epsilon_decay = parseFloat(paramDecay.value);
+
+    state.isLiveTraining = true;
+    btnLiveTrain.innerHTML = '<i class="fa-solid fa-square"></i> Stop Live Train';
+
+    // Initialize state Q-table & policy
+    state.qTable = {};
+    state.policy = {};
+    for (let r = 0; r < state.rows; r++) {
+        for (let c = 0; c < state.cols; c++) {
+            state.qTable[`${r},${c}`] = [0, 0, 0, 0];
+            state.policy[`${r},${c}`] = 0;
+        }
+    }
+
+    const episodeRewards = [];
+    const episodeSteps = [];
+    const successHistory = [];
+    const actionsVec = [[-1, 0], [0, 1], [1, 0], [0, -1]]; // Up, Right, Down, Left
+
+    let currentEp = 0;
+    const startTime = Date.now();
+
+    function chooseAction(r, c, eps) {
+        if (Math.random() < eps) return Math.floor(Math.random() * 4);
+        const qVals = state.qTable[`${r},${c}`];
+        const maxQ = Math.max(...qVals);
+        const bests = [];
+        for (let a = 0; a < 4; a++) if (qVals[a] === maxQ) bests.push(a);
+        return bests[Math.floor(Math.random() * bests.length)];
+    }
+
+    function runEpisodeStep() {
+        if (!state.isLiveTraining || currentEp >= episodes) {
+            state.isLiveTraining = false;
+            btnLiveTrain.innerHTML = '<i class="fa-solid fa-bolt"></i> Live Visual Train';
+            canvasStatus.textContent = 'Live Training Complete';
+            
+            extractGreedyPath();
+            btnAnimate.disabled = false;
+            return;
+        }
+
+        let currR = state.start[0];
+        let currC = state.start[1];
+        let epReward = 0;
+        let epSteps = 0;
+        let done = false;
+        let reachedGoal = false;
+        const maxSteps = state.rows * state.cols * 4;
+
+        let currA = chooseAction(currR, currC, epsilon);
+
+        while (!done && epSteps < maxSteps) {
+            if (algo === 'q_learning') {
+                currA = chooseAction(currR, currC, epsilon);
+            }
+
+            const move = actionsVec[currA];
+            let nextR = currR + move[0];
+            let nextC = currC + move[1];
+
+            let reward = -1.0;
+
+            if (nextR < 0 || nextR >= state.rows || nextC < 0 || nextC >= state.cols || state.grid[nextR][nextC] === 1) {
+                nextR = currR;
+                nextC = currC;
+                reward = -5.0;
+            } else if (state.grid[nextR][nextC] === 3) {
+                reward = 100.0;
+                done = true;
+                reachedGoal = true;
+            } else if (state.grid[nextR][nextC] === 4) {
+                reward = -20.0;
+            }
+
+            const currKey = `${currR},${currC}`;
+            const nextKey = `${nextR},${nextC}`;
+
+            let nextA = null;
+            if (algo === 'sarsa') {
+                nextA = !done ? chooseAction(nextR, nextC, epsilon) : null;
+            }
+
+            const target = done ? reward : reward + gamma * (algo === 'q_learning' ? Math.max(...state.qTable[nextKey]) : state.qTable[nextKey][nextA]);
+            state.qTable[currKey][currA] += alpha * (target - state.qTable[currKey][currA]);
+
+            state.policy[currKey] = state.qTable[currKey].indexOf(Math.max(...state.qTable[currKey]));
+
+            epReward += reward;
+            epSteps++;
+
+            currR = nextR;
+            currC = nextC;
+            if (algo === 'sarsa') currA = nextA;
+        }
+
+        epsilon = Math.max(0.01, epsilon * epsilon_decay);
+        currentEp++;
+
+        episodeRewards.push(epReward);
+        episodeSteps.push(epSteps);
+        successHistory.push(reachedGoal ? 1 : 0);
+
+        if (currentEp % Math.max(1, Math.floor(episodes / 50)) === 0 || currentEp === episodes) {
+            canvasStatus.textContent = `Live Ep ${currentEp}/${episodes} | Epsilon: ${epsilon.toFixed(2)}`;
+            metricSteps.textContent = epSteps;
+            metricReward.textContent = epReward.toFixed(1);
+            const succ50 = successHistory.slice(-50);
+            metricSuccess.textContent = `${((succ50.reduce((a,b)=>a+b,0)/succ50.length)*100).toFixed(1)}%`;
+            metricTime.textContent = `${Date.now() - startTime} ms`;
+
+            updateChartsSingle({ episode_rewards: episodeRewards, episode_steps: episodeSteps });
+            drawCanvas();
+        }
+
+        const delay = parseInt(paramSpeed.value);
+        state.liveTrainTimer = setTimeout(runEpisodeStep, delay);
+    }
+
+    runEpisodeStep();
+}
+
+function extractGreedyPath() {
+    let r = state.start[0];
+    let c = state.start[1];
+    const path = [[r, c]];
+    const maxSteps = state.rows * state.cols * 2;
+    let steps = 0;
+
+    while (steps < maxSteps) {
+        if (r === state.goal[0] && c === state.goal[1]) break;
+        const key = `${r},${c}`;
+        const action = state.policy ? state.policy[key] : null;
+        if (action === null || action === undefined) break;
+
+        const move = [[-1, 0], [0, 1], [1, 0], [0, -1]][action];
+        const nr = r + move[0];
+        const nc = c + move[1];
+
+        if (nr < 0 || nr >= state.rows || nc < 0 || nc >= state.cols || state.grid[nr][nc] === 1) break;
+
+        r = nr;
+        c = nc;
+        path.push([r, c]);
+        steps++;
+    }
+
+    state.evaluatedPath = path;
+    drawCanvas();
 }
