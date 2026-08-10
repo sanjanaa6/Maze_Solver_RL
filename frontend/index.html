@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Intelligent Maze Solver | Reinforcement Learning Studio</title>
+    <!-- Google Fonts & FontAwesome Icons -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Controls -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">
+                    <i class="fa-solid fa-brain-circuit"></i>
+                </div>
+                <div class="brand-text">
+                    <h2>RL Maze Studio</h2>
+                    <span>Q-Learning & SARSA Solver</span>
+                </div>
+            </div>
+
+            <!-- Algorithm Selection -->
+            <div class="section-card">
+                <h3><i class="fa-solid fa-microchip"></i> Algorithm Selection</h3>
+                <div class="segmented-control">
+                    <button class="seg-btn active" data-algo="q_learning">Q-Learning</button>
+                    <button class="seg-btn" data-algo="sarsa">SARSA</button>
+                    <button class="seg-btn" data-algo="compare">Compare Both</button>
+                </div>
+            </div>
+
+            <!-- Maze Environment Config -->
+            <div class="section-card">
+                <h3><i class="fa-solid fa-border-all"></i> Maze Configuration</h3>
+                <div class="form-group">
+                    <label for="preset-select">Preset Mazes</label>
+                    <select id="preset-select" class="form-input">
+                        <option value="medium" selected>Medium (8x8 with Traps)</option>
+                        <option value="easy">Easy (5x5 Grid)</option>
+                        <option value="cliff_walker">Cliff Walker (Classic RL)</option>
+                        <option value="hard">Hard (10x10 Narrow Paths)</option>
+                        <option value="custom">Custom Canvas Grid</option>
+                    </select>
+                </div>
+
+                <div class="grid-tools">
+                    <button id="btn-random-maze" class="btn btn-secondary btn-sm"><i class="fa-solid fa-dice"></i> Generate Random</button>
+                    <button id="btn-clear-walls" class="btn btn-secondary btn-sm"><i class="fa-solid fa-eraser"></i> Clear Canvas</button>
+                </div>
+
+                <div class="paint-mode-picker">
+                    <span class="picker-title">Cell Paint Tool:</span>
+                    <div class="paint-options">
+                        <button class="paint-btn active" data-tool="wall" title="Wall/Obstacle"><span class="swatch wall"></span> Wall</button>
+                        <button class="paint-btn" data-tool="start" title="Start Point"><span class="swatch start"></span> Start</button>
+                        <button class="paint-btn" data-tool="goal" title="Goal Point"><span class="swatch goal"></span> Goal</button>
+                        <button class="paint-btn" data-tool="trap" title="Trap Penalty"><span class="swatch trap"></span> Trap</button>
+                        <button class="paint-btn" data-tool="empty" title="Empty Path"><span class="swatch empty"></span> Eraser</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hyperparameters -->
+            <div class="section-card">
+                <h3><i class="fa-solid fa-sliders"></i> Hyperparameters</h3>
+                
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <span>Learning Rate ($\alpha$)</span>
+                        <span id="val-alpha">0.10</span>
+                    </div>
+                    <input type="range" id="param-alpha" min="0.01" max="0.5" step="0.01" value="0.10">
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <span>Discount Factor ($\gamma$)</span>
+                        <span id="val-gamma">0.99</span>
+                    </div>
+                    <input type="range" id="param-gamma" min="0.50" max="0.99" step="0.01" value="0.99">
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <span>Epsilon Decay Rate</span>
+                        <span id="val-decay">0.995</span>
+                    </div>
+                    <input type="range" id="param-decay" min="0.900" max="0.999" step="0.001" value="0.995">
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <span>Training Episodes</span>
+                        <span id="val-episodes">500</span>
+                    </div>
+                    <input type="range" id="param-episodes" min="50" max="2000" step="50" value="500">
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="action-buttons">
+                <button id="btn-train" class="btn btn-primary btn-lg"><i class="fa-solid fa-play"></i> Run Training Session</button>
+                <button id="btn-animate" class="btn btn-accent btn-lg" disabled><i class="fa-solid fa-person-running"></i> Animate Path</button>
+            </div>
+        </aside>
+
+        <!-- Main Visualizer Dashboard -->
+        <main class="main-content">
+            <!-- Header Bar -->
+            <header class="top-bar">
+                <div class="header-info">
+                    <h1 id="view-title">Q-Learning Maze Visualizer</h1>
+                    <p id="view-desc">Off-Policy temporal difference learning optimizing shortest path to goal.</p>
+                </div>
+                
+                <div class="overlay-toggles">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="chk-policy" checked>
+                        <span class="slider"></span>
+                        <span class="toggle-label"><i class="fa-solid fa-compass"></i> Policy Vectors</span>
+                    </label>
+
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="chk-heatmap">
+                        <span class="slider"></span>
+                        <span class="toggle-label"><i class="fa-solid fa-fire"></i> Q-Heatmap</span>
+                    </label>
+                </div>
+            </header>
+
+            <!-- Metrics Summary Cards -->
+            <section class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-icon blue"><i class="fa-solid fa-footsteps"></i></div>
+                    <div class="metric-data">
+                        <span class="metric-label">Best Path Steps</span>
+                        <span class="metric-value" id="metric-steps">--</span>
+                    </div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-icon green"><i class="fa-solid fa-trophy"></i></div>
+                    <div class="metric-data">
+                        <span class="metric-label">Cumulative Reward</span>
+                        <span class="metric-value" id="metric-reward">--</span>
+                    </div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-icon purple"><i class="fa-solid fa-percent"></i></div>
+                    <div class="metric-data">
+                        <span class="metric-label">Success Rate (Last 50)</span>
+                        <span class="metric-value" id="metric-success">--</span>
+                    </div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-icon amber"><i class="fa-solid fa-stopwatch"></i></div>
+                    <div class="metric-data">
+                        <span class="metric-label">Training Speed</span>
+                        <span class="metric-value" id="metric-time">--</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Canvas & Interactive Workspace -->
+            <section class="workspace-section">
+                <div class="canvas-card">
+                    <div class="canvas-header">
+                        <span><i class="fa-solid fa-vr-cardboard"></i> Interactive 2D Maze Environment</span>
+                        <div class="canvas-status" id="canvas-status">Status: Ready to Train</div>
+                    </div>
+                    <div class="canvas-container">
+                        <canvas id="maze-canvas" width="600" height="600"></canvas>
+                    </div>
+                </div>
+
+                <!-- Live Training & Performance Charts -->
+                <div class="charts-card">
+                    <div class="tab-header">
+                        <button class="tab-btn active" data-tab="rewards-tab"><i class="fa-solid fa-chart-line"></i> Reward Curve</button>
+                        <button class="tab-btn" data-tab="steps-tab"><i class="fa-solid fa-chart-column"></i> Steps per Ep</button>
+                        <button class="tab-btn" data-tab="compare-tab"><i class="fa-solid fa-code-compare"></i> Q-Learning vs SARSA</button>
+                    </div>
+
+                    <div class="tab-content active" id="rewards-tab">
+                        <canvas id="rewards-chart"></canvas>
+                    </div>
+
+                    <div class="tab-content" id="steps-tab">
+                        <canvas id="steps-chart"></canvas>
+                    </div>
+
+                    <div class="tab-content" id="compare-tab">
+                        <div class="comparison-container">
+                            <table class="compare-table">
+                                <thead>
+                                    <tr>
+                                        <th>Metric</th>
+                                        <th>Q-Learning (Off-Policy)</th>
+                                        <th>SARSA (On-Policy)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="compare-table-body">
+                                    <tr>
+                                        <td colspan="3" class="text-center">Run a comparison training session to see live benchmark metrics.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <div class="chart-wrapper-sm">
+                                <canvas id="compare-chart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
