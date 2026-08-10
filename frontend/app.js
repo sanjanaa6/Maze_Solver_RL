@@ -108,6 +108,50 @@ function bindEvents() {
         canvasStatus.textContent = 'Canvas Cleared';
     });
 
+    // Export Maze JSON
+    document.getElementById('btn-export-maze').addEventListener('click', () => {
+        const mazeData = {
+            rows: state.rows,
+            cols: state.cols,
+            grid: state.grid,
+            start: state.start,
+            goal: state.goal
+        };
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(mazeData, null, 2));
+        const dlAnchor = document.createElement('a');
+        dlAnchor.setAttribute("href", dataStr);
+        dlAnchor.setAttribute("download", `maze_${state.rows}x${state.cols}.json`);
+        document.body.appendChild(dlAnchor);
+        dlAnchor.click();
+        dlAnchor.remove();
+        canvasStatus.textContent = 'Maze Exported to JSON';
+    });
+
+    // Import Maze JSON
+    const fileImport = document.getElementById('file-import-maze');
+    document.getElementById('btn-import-maze').addEventListener('click', () => fileImport.click());
+
+    fileImport.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                const data = JSON.parse(event.target.result);
+                if (data.grid && data.rows && data.cols && data.start && data.goal) {
+                    setMazeState(data);
+                    presetSelect.value = 'custom';
+                    canvasStatus.textContent = `Imported '${file.name}'`;
+                } else {
+                    alert('Invalid maze JSON format.');
+                }
+            } catch (err) {
+                alert('Error parsing maze JSON file.');
+            }
+        };
+        reader.readAsText(file);
+    });
+
     // Tool Selector
     document.querySelectorAll('.paint-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
